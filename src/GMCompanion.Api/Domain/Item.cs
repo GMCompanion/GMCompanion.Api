@@ -4,12 +4,12 @@ public class Item : BaseStorage
 {
     public string Name { get; set; }
     public string Type { get; set; }
-    public string NormalCost { get; set; }
-    public string CheapCost { get; set; }
-    public string ExpensiveCost { get; set; }
-    public bool LimitedStock { get; set; }
-    public bool RuralStock { get; set; }
-    public bool UrbanStock { get; set; }
-    public bool PremiumStock { get; set;}
-    public List<Character> Characters { get; set; }
+    public string Description { get; set; }
+    public string Rarity { get; set; }
+    public Uri? Image { get; set; }
+    public List<string> Tags { get; set; }
+    public Double Weight { get; set; }
+    public Double Cost { get; set; }
+    public string FilterType { get; set; } 
+    public virtual ICollection<InventoryItem> Inventories{ get; set; }
 }

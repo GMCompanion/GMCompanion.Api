@@ -6,7 +6,7 @@ namespace GMCompanion.Api.Infrastucture;
 
 public class EFRepository<T> : IRepository<T> where T : BaseStorage
 {
-    private readonly MarketContext _dbContext;
+    protected readonly MarketContext _dbContext;
 
     public EFRepository(MarketContext dbContext)
     {
