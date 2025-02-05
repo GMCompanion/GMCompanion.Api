@@ -1,4 +1,5 @@
-﻿using TaskManager.Domain.Common;
+﻿using GMCompanion.Api.Domain;
+using TaskManager.Domain.Common;
 
 namespace GMCompanion.Api.Infrastucture;
 

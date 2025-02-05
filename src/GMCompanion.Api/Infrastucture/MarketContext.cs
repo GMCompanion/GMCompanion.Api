@@ -16,14 +16,19 @@ public class MarketContext : DbContext
         c =>
         {
             c.ToTable("Character");
-            c.HasMany(c => c.Items).WithMany(i => i.Characters);
         });
 
         modelBuilder.Entity<Item>(
         i => 
         { 
             i.ToTable("Item");
-            i.HasMany(i => i.Characters).WithMany(c => c.Items);
+        });
+
+        modelBuilder.Entity<InventoryItem>(i =>
+        {
+            i.ToTable("Inventory");
+            i.HasOne(i => i.Character).WithMany(c => c.Inventory).HasForeignKey(i => i.CharacterId);
+            i.HasOne(i => i.Item).WithMany(c => c.Inventories).HasForeignKey(i => i.ItemId);
         });
 
         base.OnModelCreating(modelBuilder);
