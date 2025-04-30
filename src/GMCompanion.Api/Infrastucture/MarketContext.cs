@@ -7,6 +7,7 @@ public class MarketContext : DbContext
 {
     public DbSet<Character> Characters { get; set; }
     public DbSet<Item> Items { get; set; }
+    public DbSet<InventoryItem> InventoryItems { get; set; }
 
     public MarketContext(DbContextOptions options) : base(options) { }
 

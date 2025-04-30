@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Launch .NET App (HTTP only)",
+        "type": "coreclr",
+        "request": "launch",
+        "program": "${workspaceFolder}/src/GMCompanion.Api/bin/Debug/net8.0/GMCompanion.Api.dll",
+        "args": ["--urls", "http://localhost:5000"],
+        "cwd": "${workspaceFolder}/src/GMCompanion.Api",
+        "env": {
+          "ASPNETCORE_URLS": "http://localhost:5000"
+        },
+        "stopAtEntry": false
+      }
+    ]
+  }

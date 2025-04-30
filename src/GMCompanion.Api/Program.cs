@@ -1,4 +1,5 @@
 using GMCompanion.Api.Domain;
+using GMCompanion.Api.DTOs;
 using GMCompanion.Api.Infrastucture;
 using GMCompanion.Api.SocketHubs;
 using Microsoft.AspNetCore.Mvc;
@@ -6,11 +7,17 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using TaskManager.Domain.Common;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.Preserve;
+});
 
 builder.Services.AddPostgresTaskContext(builder.Configuration);
 
@@ -21,7 +28,8 @@ builder.Services.AddCors(options =>
                       {
                           policy.WithOrigins("http://localhost:3000",
                                               "https://localhost:3000",
-                                              "https://localhost:7164")
+                                              "https://localhost:7164",
+                                              "http://localhost:5173")
                           .AllowAnyHeader().AllowAnyMethod()
                           .SetIsOriginAllowed((host) => true)
                           .AllowCredentials(); ;
@@ -36,7 +44,7 @@ app.UseCors("cors_local");
 
 app.MapGet("/items", async (EFRepository<Item> itemRepository) =>
 {
-    var getAllItemsResult =  await itemRepository.GetAll();
+    var getAllItemsResult = await itemRepository.GetAll();
     if (!getAllItemsResult.IsSuccess) Results.Problem();
     return Results.Ok(getAllItemsResult.Response);
 });
@@ -73,8 +81,8 @@ app.MapPut("/items/{id}", async (uint id, [FromBody] Item item, EFRepository<Ite
 app.MapDelete("/items/{id}", async (uint id, EFRepository<Item> itemRepository) =>
 {
     var itemToDeleteResult = await itemRepository.Get(id);
-    
-    if(!itemToDeleteResult.IsSuccess) return Results.BadRequest("Not Found");
+
+    if (!itemToDeleteResult.IsSuccess) return Results.BadRequest("Not Found");
 
     var itemToDelete = itemToDeleteResult.Response;
 
@@ -96,14 +104,15 @@ app.MapGet("/characters/{id}", async (uint id, EFRepository<Character> character
     return Results.Ok(getcharacterResult.Response);
 });
 
-app.MapPost("/characters", async ([FromBody] Character character, EFRepository<Character> characterRepository) =>
+app.MapPost("/characters", async ([FromBody] Character character, EFRepository<Character> characterRepository, IHubContext<InventoryHub, IInventoryClient> context) =>
 {
     var createResult = await characterRepository.Create(character);
     if (!createResult.IsSuccess) return Results.Problem();
+    await context.Clients.All.AddCharacter(createResult.Response);
     return Results.Ok(createResult.Response);
 });
 
-app.MapPut("/characters/{id}", async (uint id, [FromBody] Character character, EFRepository<Character> characterRepository) =>
+app.MapPut("/characters/{id}", async (uint id, [FromBody] Character character, EFRepository<Character> characterRepository, IHubContext<InventoryHub, IInventoryClient> context) =>
 {
     var characterToUpdateResult = await characterRepository.Get(id);
 
@@ -115,10 +124,13 @@ app.MapPut("/characters/{id}", async (uint id, [FromBody] Character character, E
 
     var updated = await characterRepository.Update(characterToUpdate);
 
+    context.Clients.All.UpdateCharacter(characterToUpdate);
+
+
     return Results.Ok();
 });
 
-app.MapDelete("/characters/{id}", async (uint id, EFRepository<Character> characterRepository) =>
+app.MapDelete("/characters/{id}", async (uint id, EFRepository<Character> characterRepository, IHubContext<InventoryHub, IInventoryClient> context) =>
 {
     var characterToDeleteResult = await characterRepository.Get(id);
 
@@ -128,85 +140,107 @@ app.MapDelete("/characters/{id}", async (uint id, EFRepository<Character> charac
 
     await characterRepository.Delete(characterToDelete);
 
-    return Results.Ok();
-});
-
-app.MapPut("/characters/{id}/inventory", async (uint id, [FromBody] UpdateItemInventoryRq rq, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) => 
-{
-    var item = dbContext.Items.FirstOrDefault(i => i.Id == rq.ItemId);
-    if (item is null) return Results.BadRequest($"Item {rq.ItemId} Not Found");
-
-    var character = dbContext.Characters.Include(c => c.Inventory).First(c => c.Id == id);
-    if (character is null) return Results.BadRequest($"Character {id} Not Found");
-
-    var inventoryItemToUpdate = character.Inventory.FirstOrDefault(i => i.ItemId == rq.ItemId);
-
-    if (inventoryItemToUpdate is null)
-    {
-        inventoryItemToUpdate = new InventoryItem()
-        {
-            CharacterId = character.Id,
-            ItemId = rq.ItemId,
-            Quantity = rq.Quantity,
-        };
-
-        character.Inventory.Add(inventoryItemToUpdate);
-    }
-    else
-    {
-        inventoryItemToUpdate.Quantity = inventoryItemToUpdate.Quantity + rq.Quantity;
-    }
-
-    dbContext.SaveChanges();
-
-    var options = new JsonSerializerOptions();
-    options.ReferenceHandler = ReferenceHandler.Preserve;
-
-    MemoryStream ms = new();
-    JsonSerializer.Serialize(ms, inventoryItemToUpdate, options);
-    ms.Position = 0;
-    StreamReader sr = new(ms);
-    await context.Clients.Group($"group_{id}").SendItemUpdate(sr.ReadToEnd());
+    context.Clients.All.DeleteCharacter(characterToDelete);
 
     return Results.Ok();
 });
 
-app.MapDelete("/characters/{id}/inventory", async (uint id, [FromBody] UpdateItemInventoryRq rq, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) =>
+app.MapGet("/characters/{id}/inventory/{itemId}", async (uint id, uint itemId, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) =>
 {
-    var item = dbContext.Items.First(i => i.Id == rq.ItemId);
-    if (item is null) return Results.BadRequest($"Item {rq.ItemId} Not Found");
+    Character? character = dbContext.Characters
+        .Where(c => c.Id == id)
+        .Include(c => c.Inventory
+            .Where(inv => inv.Item.Id == itemId)) // filter Inventory based on Item.Id
+        .ThenInclude(inv => inv.Item)          // include the related Item
+        .FirstOrDefault();
 
-    var character = dbContext.Characters.Include(c => c.Inventory).First(c => c.Id == id);
     if (character is null) return Results.BadRequest($"Character {id} Not Found");
+    if (character.Inventory is null || !character.Inventory.Any()) return Results.BadRequest($"Character {id} has not Item {itemId}");
 
-    var inventoryItemToUpdate = character.Inventory.FirstOrDefault(i => i.ItemId == rq.ItemId);
+    InventoryItem inventoryItem = character.Inventory.First();
 
-    if (inventoryItemToUpdate is null)
+    return Results.Ok(inventoryItem);
+});
+
+app.MapDelete("/characters/{id}/inventory/{itemId}", async (uint id, uint itemId, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) =>
+{
+    Character? character = dbContext.Characters
+        .Where(c => c.Id == id)
+        .Include(c => c.Inventory
+            .Where(inv => inv.Item.Id == itemId)) // filter Inventory based on Item.Id
+            .ThenInclude(inv => inv.Item)          // include the related Item
+        .FirstOrDefault();
+
+    if (character is null) return Results.BadRequest($"Character {id} Not Found");
+    if (character.Inventory is null || !character.Inventory.Any()) return Results.BadRequest($"Character {id} has not Item {itemId}");
+
+    InventoryItem inventoryItem = character.Inventory.First();
+
+    dbContext.InventoryItems.Remove(inventoryItem);
+    await dbContext.SaveChangesAsync();
+
+    await context.Clients.Group($"group_{id}").SendInventoryItemDelete(inventoryItem.ToInventoryItemDto());
+
+    return Results.Ok(inventoryItem);
+});
+
+app.MapPost("/characters/{id}/inventory/{itemId}", async (uint id, uint itemId, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) =>
+{
+    bool itemExists = await dbContext.Items
+    .AnyAsync(i => i.Id == itemId);
+
+    if (!itemExists) return Results.BadRequest($"Item {itemId} not found");
+
+    Character? character = dbContext.Characters
+        .Where(c => c.Id == id)
+        .Include(c => c.Inventory
+            .Where(inv => inv.Item.Id == itemId)) // filter Inventory based on Item.Id
+            .ThenInclude(inv => inv.Item)          // include the related Item
+        .FirstOrDefault();
+
+    if (character is null) return Results.BadRequest($"Character {id} Not Found");
+    if (character.Inventory is not null && character.Inventory.Any())
     {
-        return Results.BadRequest($"Can not subtract to not added item");
+        InventoryItem inventoryItem = character.Inventory.First();
+        return Results.Ok(inventoryItem);
     }
-    
-    inventoryItemToUpdate.Quantity = inventoryItemToUpdate.Quantity - rq.Quantity;
-    
-    if(inventoryItemToUpdate.Quantity <= 0)
+
+    InventoryItem inventoryItemToAdd = new InventoryItem
     {
-        character.Inventory.Remove(inventoryItemToUpdate); 
-    } 
+        CharacterId = id,
+        ItemId = itemId,
+        Quantity = 1
+    };
 
-    dbContext.SaveChanges();
+    dbContext.InventoryItems.Add(inventoryItemToAdd);
+    await dbContext.SaveChangesAsync();
 
+    await context.Clients.Group($"group_{id}").SendInventoryItemAdd(inventoryItemToAdd.ToInventoryItemDto());
 
-    var options = new JsonSerializerOptions();
-    options.ReferenceHandler = ReferenceHandler.Preserve;
+    return Results.Ok(inventoryItemToAdd);
+});
 
-    MemoryStream ms = new();
-    JsonSerializer.Serialize(ms, inventoryItemToUpdate, options);
-    ms.Position = 0;
-    StreamReader sr = new(ms);
-    await context.Clients.Group($"group_{id}").SendItemUpdate(sr.ReadToEnd());
+app.MapPut("/characters/{id}/inventory/{itemId}", async (uint id, uint itemId, [FromBody] UpdateItemInventoryRq updateRq, IHubContext<InventoryHub, IInventoryClient> context, MarketContext dbContext) =>
+{
+    Character? character = dbContext.Characters
+        .Where(c => c.Id == id)
+        .Include(c => c.Inventory
+            .Where(inv => inv.Item.Id == itemId)) // filter Inventory based on Item.Id
+            .ThenInclude(inv => inv.Item)          // include the related Item
+        .FirstOrDefault();
 
-    return Results.Ok();    
+    if (character is null) return Results.BadRequest($"Character {id} Not Found");
+    if (character.Inventory is null || !character.Inventory.Any()) return Results.BadRequest($"Character {id} has not Item {itemId}");
 
+    InventoryItem inventoryItem = character.Inventory.First();
+    inventoryItem.Quantity = updateRq.Quantity;
+
+    dbContext.InventoryItems.Update(inventoryItem);
+    await dbContext.SaveChangesAsync();
+
+    await context.Clients.Group($"group_{id}").SendInventoryItemUpdate(inventoryItem.ToInventoryItemDto());
+
+    return Results.Ok(inventoryItem);
 });
 
 app.MapHub<InventoryHub>("/characters/inventory");
@@ -222,6 +256,5 @@ app.Run();
 
 public class UpdateItemInventoryRq
 {
-    public uint ItemId { get; set; }
     public uint Quantity { get; set; }
 }

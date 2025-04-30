@@ -1,4 +1,5 @@
 ﻿using GMCompanion.Api.Domain;
+using GMCompanion.Api.DTOs;
 using GMCompanion.Api.Infrastucture;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -15,10 +16,15 @@ public sealed class InventoryHub : Hub<IInventoryClient>
         _context = dbContext;
     }
 
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
         Console.WriteLine($"Connected Client {Context.ConnectionId}");
-        return Task.CompletedTask;
+
+        var characters = await _context.Characters.ToListAsync();
+
+        await Clients.Caller.SendCharacters(characters);
+        
+        await base.OnConnectedAsync();
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)
@@ -35,21 +41,27 @@ public sealed class InventoryHub : Hub<IInventoryClient>
 
         await Groups.AddToGroupAsync(Context.ConnectionId, $"group_{characterId}");
 
-        MemoryStream ms = new();
-        var options = new JsonSerializerOptions();
-        options.ReferenceHandler = ReferenceHandler.Preserve;
+        List<InventoryItem> items = character.Inventory.ToList();
+        
 
-        JsonSerializer.Serialize(ms, character.Inventory, options);
-        ms.Position = 0;
-        StreamReader sr = new(ms);
+        await Clients.Caller.SendInventory(items.Select(i => i.ToInventoryItemDto()).ToList());
+    }
 
-        await Clients.Caller.SendItemsUpdate(sr.ReadToEnd());
+    public async Task DisconectToInventory(uint characterId)
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"group_{characterId}");
     }
 }
 
 public interface IInventoryClient
 {
-    public Task SendItemUpdate(string itemMessage);
-    public Task SendItemsUpdate(string itemMessage);
+    public Task SendInventory(List<InventoryItemDto> item);
+    public Task SendInventoryItemUpdate(InventoryItemDto item);
+    public Task SendInventoryItemDelete(InventoryItemDto item);
+    public Task SendInventoryItemAdd(InventoryItemDto item);
 
+    public Task SendCharacters(List<Character> characters);
+    public Task UpdateCharacter(Character character);
+    public Task DeleteCharacter(Character character);
+    public Task AddCharacter(Character character);
 }
